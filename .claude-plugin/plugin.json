@@ -1,12 +1,19 @@
 {
   "name": "next-steps-jev",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "next-steps, with Jev scoring each suggested next prompt by how much it helps the current goal. Press 1, 2 or 3 to put one in the prompt box as a draft, 0 to dismiss.",
   "author": {
     "name": "kevinyin9"
   },
   "license": "MIT",
   "userConfig": {
+    "typesafeApiKey": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Your TypeSafe key for Jev scoring. Saved in secure storage. Leave empty to use the TYPESAFE_API_KEY environment variable instead.",
+      "sensitive": true,
+      "required": false
+    },
     "minAnswerChars": {
       "type": "number",
       "title": "Shortest answer to suggest after",

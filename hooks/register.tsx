@@ -16,7 +16,7 @@ type Suggestion = { label: string; prompt: string; score?: number }
 type View =
   | { kind: 'hidden' }
   | { kind: 'loading'; turnId: string }
-  | { kind: 'offer'; items: Suggestion[]; note?: string }
+  | { kind: 'offer'; items: Suggestion[]; note?: string; original?: string }
 
 const MAX_SUGGESTIONS = 3
 const LABEL_MAX = 48
@@ -218,9 +218,12 @@ async function scoreWithJev(
   items: Suggestion[],
   message: string,
   answer: string,
+  savedKey: string,
 ): Promise<Scored> {
-  const apiKey = await $.env.get('TYPESAFE_API_KEY')
-  if (apiKey === undefined || apiKey === '') return { items, note: 'Jev 未評分：找不到金鑰' }
+  const apiKey = savedKey !== '' ? savedKey : await $.env.get('TYPESAFE_API_KEY')
+  if (apiKey === undefined || apiKey === '') {
+    return { items, note: 'Jev 未評分：找不到金鑰，請設定 TYPESAFE_API_KEY' }
+  }
   try {
     const response = await Promise.race([
       $.http.fetch(JEV_URL, {
@@ -242,6 +245,18 @@ async function scoreWithJev(
   } catch (error) {
     $.ui.log(`jev failed: ${error instanceof Error ? error.name : 'error'}`)
     return { items, note: 'Jev 未評分：連線失敗' }
+  }
+}
+
+// The original plugin draws its own 1/2/3 and asks the model again each turn, under
+// whichever marketplace it came from. Read fresh, so turning it off clears the warning.
+async function originalStillOn($: EngineInterface): Promise<string | undefined> {
+  try {
+    const enabled = await $.settings.read({ key: 'enabledPlugins' })
+    if (typeof enabled !== 'object' || enabled === null) return undefined
+    return Object.entries(enabled).find(([id, isOn]) => id.startsWith('next-steps@') && isOn === true)?.[0]
+  } catch {
+    return undefined
   }
 }
 
@@ -267,6 +282,7 @@ function show($: EngineInterface, nextView: View): void {
 export const register: Register = (on, options) => {
   const minTurnChars = typeof options?.minAnswerChars === 'number' ? options.minAnswerChars : 80
   const suggestsSkills = options?.suggestSkills !== false
+  const savedKey = typeof options?.typesafeApiKey === 'string' ? options.typesafeApiKey.trim() : ''
 
   on('session.start', async ($, e, next) => {
     drawsForAPerson = e.isInteractive && e.surface === 'terminal'
@@ -298,6 +314,7 @@ export const register: Register = (on, options) => {
     show($, { kind: 'loading', turnId })
     void (async () => {
       let scored: Scored = { items: [] }
+      let original: string | undefined
       try {
         // Without the list the fork still suggests; slash prompts go unchecked.
         const commands = await $.command.list().catch(() => null)
@@ -306,13 +323,14 @@ export const register: Register = (on, options) => {
         const reply = await $.model.fork({ prompt: forkPrompt(skills) })
         const items = reply.isAnswered ? parseSuggestions(reply.text, known) : []
         // Scored before anything is drawn, so a number key never moves under a press.
-        scored = items.length === 0 ? { items } : await scoreWithJev($, items, message, answer)
+        scored = items.length === 0 ? { items } : await scoreWithJev($, items, message, answer, savedKey)
+        original = await originalStillOn($)
       } catch (error) {
         $.ui.log(`fork failed: ${String(error)}`)
       }
       // A newer turn started (or another completed) while we waited: drop ours.
       if (view.kind !== 'loading' || view.turnId !== turnId) return
-      show($, scored.items.length === 0 ? { kind: 'hidden' } : { kind: 'offer', ...scored })
+      show($, scored.items.length === 0 ? { kind: 'hidden' } : { kind: 'offer', ...scored, original })
       const top = scored.items[0]
       if (top !== undefined) void $.prompt.suggest({ text: top.prompt }).catch(() => undefined)
     })()
@@ -340,6 +358,11 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {below}
         <Box marginTop={1} />
+        {view.original === undefined ? null : (
+          <Text color="yellow">
+            {`原版 next-steps 也還開著，數字鍵會衝突、模型費用會變兩倍。請先關掉：claude plugin disable ${view.original} --scope user，再重開 Claude Code`}
+          </Text>
+        )}
         <Text dimColor>{view.note === undefined ? 'next:' : `next: (${view.note})`}</Text>
         {items.map((item, index) => (
           <Box key={`s${index}`} marginLeft={2}>

@@ -25,7 +25,12 @@ const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 let clock: any
 let forks = 0
 
-function world(on: any, http: (e: any) => unknown, env: Record<string, string> = { TYPESAFE_API_KEY: 'k' }) {
+function world(
+  on: any,
+  http: (e: any) => unknown,
+  env: Record<string, string> = { TYPESAFE_API_KEY: 'k' },
+  enabledPlugins: Record<string, boolean> = {},
+) {
   const calls: any[] = []
   mock.env(on, env)
   clock = mock.clock(on)
@@ -47,6 +52,8 @@ function world(on: any, http: (e: any) => unknown, env: Record<string, string> =
   on('prompt.suggest', () => ({ isShown: true }))
   on('turn.complete', () => ({ text: '' }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  // The engine answers with whole settings; `$.settings.read({ key })` picks the key out.
+  on('settings.read', () => ({ value: { enabledPlugins } }))
   return calls
 }
 
@@ -107,6 +114,41 @@ test('no key: no request leaves, suggestions still show', async ($, on) => {
   const shown = await labels($)
   expect(shown[0]).toBe('indent')
   expect(calls).toHaveLength(0)
+})
+
+test('a key saved in the plugin options is used over the environment', { options: { typesafeApiKey: 'saved' } }, async ($, on) => {
+  const calls = world(on, () => ok([1, 2, 3]))
+  await finish($)
+  await labels($)
+  expect(calls[0].init.headers.Authorization).toBe('Bearer saved')
+})
+
+async function warnings($: any): Promise<string[]> {
+  await labels($)
+  const ui = await $.ui.mount(BAND)
+  const found = await ui.findAll({ type: 'Text', text: /原版 next-steps/ })
+  await ui.unmount()
+  return found.map((f: any) => f.text)
+}
+
+test('original next-steps on: warn above the options with its exact id', async ($, on) => {
+  world(on, () => ok([1, 2, 3]), undefined, { 'next-steps@claude-community': true })
+  await finish($)
+  const found = await warnings($)
+  expect(found).toHaveLength(1)
+  expect(found[0]).toContain('claude plugin disable next-steps@claude-community --scope user')
+})
+
+test('original next-steps off: no warning', async ($, on) => {
+  world(on, () => ok([1, 2, 3]), undefined, { 'next-steps@claude-community': false })
+  await finish($)
+  expect(await warnings($)).toHaveLength(0)
+})
+
+test('this plugin being on is not mistaken for the original', async ($, on) => {
+  world(on, () => ok([1, 2, 3]), undefined, { 'next-steps-jev@next-steps-jev': true })
+  await finish($)
+  expect(await warnings($)).toHaveLength(0)
 })
 
 test('Jev refuses: suggestions show in the original order', async ($, on) => {

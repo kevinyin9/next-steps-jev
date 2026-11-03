@@ -28,8 +28,14 @@ Nothing is sent from `claude -p` runs, the desktop app, VS Code, or for subagent
 
 ## Setup
 
-1. Get a TypeSafe API key and set it as the environment variable `TYPESAFE_API_KEY`. Keep it out of this repository.
-2. Install the plugin at the prompt of a terminal session:
+1. Get a TypeSafe API key.
+2. If you have the original `next-steps` installed, disable it, or both will run and compete for the same number keys. The plugin shows a warning above its suggestions while the original is on.
+
+   ```
+   claude plugin disable next-steps@claude-community --scope user
+   ```
+
+3. Install the plugin at the prompt of a terminal session:
 
    ```
    /plugin install next-steps-jev --marketplace kevinyin9/next-steps-jev
@@ -41,8 +47,17 @@ Nothing is sent from `claude -p` runs, the desktop app, VS Code, or for subagent
    claude plugin install next-steps-jev --marketplace kevinyin9/next-steps-jev
    ```
 
-3. If you have the original `next-steps` installed, disable it, or both will run and compete for the same number keys.
-4. Close the terminal fully and start Claude Code again, so the session can read the key.
+4. Provide the key in one of two ways. Do not paste it into a Claude conversation.
+
+   - **At install:** enter it on the options screen. It is saved in Claude Code's secure storage and takes priority.
+   - **As an environment variable:** set `TYPESAFE_API_KEY`, then close the terminal fully and start Claude Code again. In Windows PowerShell:
+
+     ```powershell
+     $s = Read-Host 'TypeSafe key' -AsSecureString
+     [Environment]::SetEnvironmentVariable('TYPESAFE_API_KEY', [Net.NetworkCredential]::new('', $s).Password, 'User')
+     ```
+
+     On macOS or Linux, add `export TYPESAFE_API_KEY=...` to your shell's startup file, such as `~/.zshrc`.
 
 ## Costs
 
@@ -63,6 +78,7 @@ If Jev has no key, returns an error, or takes more than 3 seconds, the suggestio
 
 | Option | Default | What it does |
 | --- | --- | --- |
+| `typesafeApiKey` | unset | Your TypeSafe key, kept in secure storage. If unset, `TYPESAFE_API_KEY` is used |
 | `minAnswerChars` | `80` | Skip suggestions after answers shorter than this |
 | `suggestSkills` | `true` | Tell the suggester which skills and slash commands the session has |
 
