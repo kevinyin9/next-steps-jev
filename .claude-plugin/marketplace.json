@@ -1,0 +1,6 @@
+{
+  "name": "next-steps-jev",
+  "owner": { "name": "kevinyin9" },
+  "description": "next-steps for Claude Code, with TypeSafe's Jev scoring each suggested next prompt.",
+  "plugins": [{ "name": "next-steps-jev", "source": "./" }]
+}
