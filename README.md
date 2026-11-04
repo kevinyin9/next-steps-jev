@@ -1,6 +1,8 @@
 # next-steps-jev
 
-A Claude Code plugin based on [next-steps](https://github.com/anthropics/claude-plugins-community) by Thariq Shihipar. After each answer, your session's model suggests up to three next prompts. TypeSafe's [Jev](https://docs.typesafe.ai) then scores each one by how much it would help your current goal, and the best one is listed first.
+**Suggested next steps for Claude Code, scored by how much each one helps your goal.**
+
+After each answer, your session's model suggests up to three next prompts. Those suggestions are its guess at what you are likely to ask, which is not always what is most worth doing. So a second model, TypeSafe's [Jev](https://docs.typesafe.ai), scores each one against your current goal and the best one is listed first.
 
 ```
 next:
@@ -10,9 +12,15 @@ next:
   0: dismiss
 ```
 
+The scores above come from a real Jev request on a made-up conversation about fixing a bug. `★ 建議` means "recommended".
+
 Press `1`, `2` or `3` from an empty prompt box to put that prompt in the box as a draft, then edit it and press Enter yourself. `0` dismisses. Tab takes the top suggestion. The plugin never submits a prompt on its own.
 
-The on-screen status text is in Traditional Chinese (`★ 建議` means "recommended").
+## Requirements
+
+- Claude Code in a terminal. Suggestions are not drawn in the desktop app or VS Code. Tested on version 2.1.317. The plugin API it uses is in early access and may change between releases.
+- A TypeSafe API key.
+- You accept that conversation text is sent to TypeSafe, as described next.
 
 ## What leaves your computer
 
@@ -72,7 +80,19 @@ Each suggestion gets a separate score from 0 to 100, based on five levels from "
 
 Jev gives numbers without reasons, and it sees only the text listed above, so it does not know your longer-term goals. Treat a score as a second opinion.
 
-If Jev has no key, returns an error, or takes more than 3 seconds, the suggestions still appear in their original order, with the reason at the top.
+## On-screen messages
+
+Messages appear above the suggestions, in Traditional Chinese. If Jev cannot score, the suggestions still appear in their original order.
+
+| Message | Meaning |
+| --- | --- |
+| `Jev：這幾個都不太值得現在做` | Scored, but none reached 50, so nothing is recommended |
+| `Jev 未評分：找不到金鑰，請設定 TYPESAFE_API_KEY` | Not scored: no key found, and nothing was sent |
+| `Jev 未評分：逾時` | Not scored: Jev took more than 3 seconds |
+| `Jev 未評分：HTTP 401` (or another code) | Not scored: Jev returned this error. 401 usually means a bad key |
+| `Jev 未評分：回應格式不對` | Not scored: Jev's reply could not be read |
+| `Jev 未評分：連線失敗` | Not scored: the request failed |
+| `原版 next-steps 也還開著…` (yellow) | The original plugin is still on. The message gives the command to turn it off |
 
 ## Options
 
@@ -82,11 +102,30 @@ If Jev has no key, returns an error, or takes more than 3 seconds, the suggestio
 | `minAnswerChars` | `80` | Skip suggestions after answers shorter than this |
 | `suggestSkills` | `true` | Tell the suggester which skills and slash commands the session has |
 
+## Update or remove
+
+```
+claude plugin update next-steps-jev@next-steps-jev
+claude plugin uninstall next-steps-jev@next-steps-jev
+```
+
+After an update, restart Claude Code.
+
 ## Tests
 
 ```
 claude plugin test .
 ```
+
+## 繁體中文簡介
+
+每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按數字鍵只會把內容放進輸入框，不會自動送出。
+
+**注意：** 你的最後一句話、模型的最後回答和建議選項都會送到 TypeSafe，也會多出模型和 Jev 的費用。安裝前請先看上面的 [What leaves your computer](#what-leaves-your-computer) 和 [Costs](#costs)。
+
+## Credits
+
+Based on [next-steps](https://github.com/anthropics/claude-plugins-community) by Thariq Shihipar.
 
 ## License
 
