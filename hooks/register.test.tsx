@@ -24,6 +24,9 @@ const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 
 let clock: any
 let forks = 0
+let filled: string[] = []
+let forkReply = FORK_REPLY
+const stored = new Map<string, unknown>()
 
 function world(
   on: any,
@@ -33,6 +36,18 @@ function world(
 ) {
   const calls: any[] = []
   mock.env(on, env)
+  stored.clear()
+  on('store.get', (_: unknown, e: any) => ({ value: stored.get(e.key) }))
+  on('store.set', (_: unknown, e: any) => {
+    stored.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined }
+  })
+  on('store.delete', (_: unknown, e: any) => {
+    stored.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...stored.keys()] }))
+  on('command.register', () => ({ value: { command: 'jev-stats' } }))
   clock = mock.clock(on)
   on('ui.log', () => ({ value: undefined }))
   on('ui.render', ($: any, e: any) => {
@@ -41,16 +56,23 @@ function world(
   })
   on('command.list', () => ({ value: [] }))
   forks = 0
+  forkReply = FORK_REPLY
   on('model.fork', () => {
     forks++
-    return { value: { isAnswered: true, text: FORK_REPLY, usage: USAGE } }
+    return { value: { isAnswered: true, text: forkReply, usage: USAGE } }
   })
   on('http.fetch', (_: unknown, e: any) => {
     calls.push(e)
     return http(e)
   })
   on('prompt.suggest', () => ({ isShown: true }))
+  filled = []
+  on('prompt.fill', (_: unknown, e: any) => {
+    filled.push(e.text)
+    return { isFilled: true }
+  })
   on('turn.complete', () => ({ text: '' }))
+  on('turn.start', (_: unknown, e: any) => e)
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   // The engine answers with whole settings; `$.settings.read({ key })` picks the key out.
   on('settings.read', () => ({ value: { enabledPlugins } }))
@@ -94,7 +116,7 @@ test('best step goes first with its score and the recommendation', async ($, on)
   expect(shown[0]).toBe('tests  84 ★ 建議')
   expect(shown[1]).toBe('commit  40')
   expect(shown[2]).toBe('indent  14')
-  expect(shown[3]).toBe('dismiss')
+  expect(shown.slice(3)).toEqual(['1+2', '2+3', '1+3', '1+2+3', 'dismiss'])
   expect(calls).toHaveLength(1)
   expect(calls[0].url).toBe('https://api.typesafe.ai/v1/systemone')
   expect(calls[0].init.headers.Authorization).toBe('Bearer k')
@@ -194,4 +216,179 @@ test("a subagent's end sends nothing to Jev", async ($, on) => {
   await finish($, 't2', { agentId: 'a1' })
   await new Promise(resolve => setTimeout(resolve, 30))
   expect(calls).toHaveLength(0)
+})
+
+async function pressAfterOffer($: any, key: string): Promise<void> {
+  await labels($)
+  const ui = await $.ui.mount(BAND)
+  await ui.press({ key })
+  await ui.unmount()
+  for (let i = 0; i < 50 && filled.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5))
+}
+
+test('1+2+3 fills one numbered draft, best first', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'combo-1-2-3')
+  expect(filled).toEqual([['1. run the tests', '2. commit this', '3. reformat everything'].join('\n')])
+})
+
+test('1+3 skips the middle step', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'combo-1-3')
+  expect(filled).toEqual([['1. run the tests', '2. reformat everything'].join('\n')])
+})
+
+test('combinations sit on keys 4 to 7', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  const ui = await $.ui.mount(BAND)
+  const buttons = await ui.findAll({ type: 'Button' })
+  await ui.unmount()
+  const hotkeys = Object.fromEntries(buttons.map((b: any) => [b.props?.label, b.props?.hotkey]))
+  expect([hotkeys['1+2'], hotkeys['2+3'], hotkeys['1+3'], hotkeys['1+2+3']]).toEqual(['4', '5', '6', '7'])
+})
+
+test('two suggestions offer only 1+2', async ($, on) => {
+  world(on, () => ok([3, 1]))
+  forkReply = JSON.stringify([
+    { label: 'tests', prompt: 'run the tests' },
+    { label: 'commit', prompt: 'commit this' },
+  ])
+  await finish($)
+  const shown = await labels($)
+  expect(shown.slice(2)).toEqual(['1+2', 'dismiss'])
+})
+
+async function stats($: any): Promise<string> {
+  // The outcome is written detached from the press; give it time to land.
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const run = await $.command.run({ command: 'jev-stats', args: '' })
+  return run?.text ?? ''
+}
+
+test('pressing Jev’s first place is counted as such', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  const text = await stats($)
+  expect(text).toContain('最近 1 次')
+  expect(text).toContain('選了 Jev 第一名 1 次（100%）')
+  expect(text).toContain('隨便選的話，大約會是 33%')
+})
+
+test('pressing the third is a pick that missed the first place', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-3')
+  const text = await stats($)
+  expect(text).toContain('選了 Jev 第一名 0 次（0%）')
+  expect(text).toContain('你選的建議平均 14 分，沒選的平均 62 分')
+})
+
+test('0 is counted as dismissed', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  const ui = await $.ui.mount(BAND)
+  await ui.press({ key: 'dismiss' })
+  await ui.unmount()
+  expect(await stats($)).toContain('按 0 關掉：1 次')
+})
+
+test('sending the top prompt unchanged (as Tab does) counts as choosing it', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
+  await finish($)
+  await labels($)
+  await $.prompt.submit({ text: 'run the tests' } as any)
+  expect(await stats($)).toContain('選了 Jev 第一名 1 次')
+})
+
+test('typing something else counts as not chosen', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
+  await finish($)
+  await labels($)
+  await $.prompt.submit({ text: 'something of my own' } as any)
+  expect(await stats($)).toContain('沒選，自己打別的：1 次')
+})
+
+test('the record holds scores and places, never prompt text', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'combo-1-3')
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const held = stored.get('picks-v1')
+  expect(held).toEqual([{ scores: [84, 40, 14], chose: 'picked', places: [0, 2] }])
+})
+
+test('an offer without scores is not recorded', async ($, on) => {
+  world(on, () => ok([1, 2, 3]), {})
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  expect(await stats($)).toContain('還沒有紀錄')
+})
+
+test('reset clears the record', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  await new Promise(resolve => setTimeout(resolve, 30))
+  await $.command.run({ command: 'jev-stats', args: 'reset' } as any)
+  expect(await stats($)).toContain('還沒有紀錄')
+})
+
+async function next($: any): Promise<string> {
+  const run = await $.command.run({ command: 'jev-next', args: '' } as any)
+  return run?.text ?? ''
+}
+
+test('/jev-next prints the offer as text, best first, with the full prompts', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  expect(await next($)).toBe(
+    [
+      '下一步建議',
+      ['1. tests  84 ★ 建議', 'run the tests'].join('\n'),
+      ['2. commit  40', 'commit this'].join('\n'),
+      ['3. indent  14', 'reformat everything'].join('\n'),
+    ].join('\n\n'),
+  )
+})
+
+test('/jev-next carries the Jev note', async ($, on) => {
+  world(on, () => ok([1, 2, 3]), {})
+  await finish($)
+  await labels($)
+  const text = await next($)
+  expect(text.startsWith('下一步建議（Jev 未評分：找不到金鑰，請設定 TYPESAFE_API_KEY）')).toBe(true)
+  expect(text).toContain(['1. indent', 'reformat everything'].join('\n'))
+})
+
+test('/jev-next with nothing offered says so', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await $.session.start(TERMINAL)
+  expect(await next($)).toContain('目前沒有建議')
+})
+
+test('/jev-next after the offer was used says nothing is offered', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  expect(await next($)).toContain('目前沒有建議')
+})
+
+test('/jev-next does not count as answering the offer', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
+  await finish($)
+  await labels($)
+  await $.prompt.submit({ text: '/jev-next', command: 'jev-next' } as any)
+  await next($)
+  await $.prompt.submit({ text: 'run the tests' } as any)
+  expect(await stats($)).toContain('選了 Jev 第一名 1 次')
 })

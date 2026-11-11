@@ -1,7 +1,7 @@
 {
   "name": "next-steps-jev",
-  "version": "0.2.0",
-  "description": "next-steps, with Jev scoring each suggested next prompt by how much it helps the current goal. Press 1, 2 or 3 to put one in the prompt box as a draft, 0 to dismiss.",
+  "version": "0.3.0",
+  "description": "next-steps, with Jev scoring each suggested next prompt by how much it helps the current goal. Press 1, 2 or 3 to put one in the prompt box as a draft, 4 to 7 for two or three at once, 0 to dismiss.",
   "author": {
     "name": "kevinyin9"
   },

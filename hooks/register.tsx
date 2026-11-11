@@ -6,8 +6,11 @@
 // When a turn ends, fork the session and ask for up to three likely next
 // prompts, then ask TypeSafe's Jev how much each one would help the current
 // goal. Draw them best first as 1/2/3 buttons above the composer; a press writes
-// that prompt into the composer as a draft; 0 dismisses. Nothing is submitted by
+// that prompt into the composer as a draft; 4 to 7 write two or three of them as
+// one numbered draft; 0 dismisses. Nothing is submitted by
 // the plugin. If Jev cannot answer, the suggestions show unscored with the reason.
+// The phone app (Remote Control) draws no band and tells plugins nothing, but
+// it shows command output: `/jev-next` prints the standing offer as text.
 
 import type { CommandInfo, EngineInterface, Register, RenderElement } from 'claude-code'
 
@@ -260,10 +263,88 @@ async function originalStillOn($: EngineInterface): Promise<string | undefined> 
   }
 }
 
+// Several steps at once, by their places on screen (0 is the button marked 1),
+// on the keys after the single ones, in the order the person asked for them.
+const COMBINATIONS: readonly (readonly number[])[] = [[0, 1], [1, 2], [0, 2], [0, 1, 2]]
+
+function combinationsFor(count: number): { places: readonly number[]; hotkey: string }[] {
+  return COMBINATIONS.filter(places => places.every(place => place < count)).map((places, index) => ({
+    places,
+    hotkey: String(MAX_SUGGESTIONS + 1 + index),
+  }))
+}
+
+// One prompt per line, numbered, in the order they are shown (best first).
+function combinedPrompt(items: readonly Suggestion[], places: readonly number[]): string {
+  return places.map((place, index) => `${index + 1}. ${items[place]?.prompt ?? ''}`).join('\n')
+}
+
 function buttonLabel(item: Suggestion, index: number): string {
   if (item.score === undefined) return item.label
   const recommended = index === 0 && item.score >= RECOMMEND_FROM
   return `${item.label}  ${item.score}${recommended ? ' ★ 建議' : ''}`
+}
+
+// What happened to each scored offer, kept on this computer in the plugin's own
+// store so `/jev-stats` can tell whether Jev's first place is the one chosen.
+// Only scores and positions: no prompt or conversation text is kept.
+type Pick = { scores: number[]; chose: 'picked' | 'dismissed' | 'ignored'; places?: number[] }
+
+const PICKS_KEY = 'picks-v1'
+const PICKS_MAX = 1000
+const STATS_COMMAND = 'jev-stats'
+const FEW_PICKS = 20
+
+function isPick(value: unknown): value is Pick {
+  if (typeof value !== 'object' || value === null) return false
+  const { scores, chose, places } = value as Partial<Pick>
+  return (
+    Array.isArray(scores) &&
+    scores.every(score => typeof score === 'number') &&
+    (chose === 'picked' || chose === 'dismissed' || chose === 'ignored') &&
+    (places === undefined || (Array.isArray(places) && places.every(place => typeof place === 'number')))
+  )
+}
+
+async function readPicks($: EngineInterface): Promise<Pick[]> {
+  const held = await $.store.get(PICKS_KEY)
+  return Array.isArray(held) ? held.filter(isPick) : []
+}
+
+const percent = (part: number, whole: number) => (whole === 0 ? '—' : `${Math.round((part / whole) * 100)}%`)
+const average = (values: number[]) =>
+  values.length === 0 ? '—' : `${Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)} 分`
+
+function statsText(picks: readonly Pick[]): string {
+  if (picks.length === 0) {
+    return '還沒有紀錄。之後每次有 Jev 分數的建議出現，都會記下你選了哪個。'
+  }
+  const picked = picks.filter(pick => pick.chose === 'picked' && pick.places !== undefined)
+  const single = picked.filter(pick => pick.places?.length === 1)
+  const several = picked.filter(pick => (pick.places?.length ?? 0) > 1)
+  const singleTop = single.filter(pick => pick.places?.[0] === 0).length
+  // Choosing at random among n buttons finds the first place 1 time in n.
+  const chance = single.reduce((sum, pick) => sum + 1 / pick.scores.length, 0)
+  const severalWithTop = several.filter(pick => pick.places?.includes(0)).length
+  const chosenScores = picked.flatMap(pick => pick.places?.map(place => pick.scores[place] ?? 0) ?? [])
+  const passedScores = picked.flatMap(pick => pick.scores.filter((_, place) => !pick.places?.includes(place)))
+  const lowOffers = picks.filter(pick => (pick.scores[0] ?? 0) < RECOMMEND_FROM)
+  const lowPicked = lowOffers.filter(pick => pick.chose === 'picked').length
+  const lines = [
+    `Jev 準不準（最近 ${picks.length} 次有分數的建議）`,
+    '',
+    `只選一個：${single.length} 次，其中選了 Jev 第一名 ${singleTop} 次（${percent(singleTop, single.length)}）`,
+    `　隨便選的話，大約會是 ${percent(chance, single.length)}`,
+    `一起做好幾個：${several.length} 次，其中有包含第一名 ${severalWithTop} 次`,
+    `按 0 關掉：${picks.filter(pick => pick.chose === 'dismissed').length} 次`,
+    `沒選，自己打別的：${picks.filter(pick => pick.chose === 'ignored').length} 次`,
+    '',
+    `你選的建議平均 ${average(chosenScores)}，沒選的平均 ${average(passedScores)}`,
+    `Jev 覺得都不太值得做的 ${lowOffers.length} 次裡，你還是選了 ${lowPicked} 次`,
+  ]
+  if (single.length < FEW_PICKS) lines.push('', `只選一個的次數還不到 ${FEW_PICKS} 次，比例參考就好。`)
+  lines.push('', `清空紀錄：/${STATS_COMMAND} reset`)
+  return lines.join('\n')
 }
 
 // Session-local view state; a hot reload resets it, which is fine.
@@ -274,9 +355,47 @@ let latestUserMessage = ''
 // send text out for a result nobody sees. A reload runs session.start again.
 let drawsForAPerson = false
 
+// The scored offer on screen whose outcome is not written yet.
+let open: { scores: number[]; prompts: string[] } | null = null
+
 function show($: EngineInterface, nextView: View): void {
   view = nextView
   $.ui.invalidate('ui.render')
+}
+
+// Writes the open offer's outcome once; later calls for it do nothing.
+function settle($: EngineInterface, chose: Pick['chose'], places?: number[]): void {
+  if (open === null) return
+  const pick: Pick = places === undefined ? { scores: open.scores, chose } : { scores: open.scores, chose, places }
+  open = null
+  void (async () => {
+    try {
+      const picks = await readPicks($)
+      await $.store.set(PICKS_KEY, [...picks, pick].slice(-PICKS_MAX))
+    } catch (error) {
+      $.ui.log(`pick not saved: ${error instanceof Error ? error.name : 'error'}`)
+    }
+  })()
+}
+
+const NEXT_COMMAND = 'jev-next'
+
+// The standing offer as plain text, for a screen with no band (the phone).
+function offerText(): string {
+  if (view.kind === 'loading') return '建議還在產生，等幾秒再試一次。'
+  if (view.kind === 'hidden') return '目前沒有建議。建議會在下一個回答結束後出現；送出新訊息或選了之後就會清掉。'
+  const head = view.note === undefined ? '下一步建議' : `下一步建議（${view.note}）`
+  const blocks = view.items.map((item, index) => `${index + 1}. ${buttonLabel(item, index)}\n${item.prompt}`)
+  return [head, ...blocks].join('\n\n')
+}
+
+// A prompt sent without a press may still be one offered, as Tab puts the top one in.
+function placesSent(text: string, prompts: readonly string[]): number[] | undefined {
+  const sent = text.trim()
+  const one = prompts.findIndex(prompt => prompt === sent)
+  if (one !== -1) return [one]
+  const items = prompts.map(prompt => ({ label: '', prompt }))
+  return combinationsFor(prompts.length).find(({ places }) => combinedPrompt(items, places) === sent)?.places.slice()
 }
 
 export const register: Register = (on, options) => {
@@ -286,12 +405,38 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     drawsForAPerson = e.isInteractive && e.surface === 'terminal'
+    await $.command
+      .register({ name: STATS_COMMAND, description: 'next-steps-jev: how often you chose Jev’s first place' })
+      .catch(() => undefined)
+    await $.command
+      .register({ name: NEXT_COMMAND, description: 'next-steps-jev: print the current suggestions as text (for the phone)' })
+      .catch(() => undefined)
     return next(e)
+  })
+
+  on('command.run', { command: NEXT_COMMAND }, async () => ({ text: offerText() }))
+
+  on('command.run', { command: STATS_COMMAND }, async ($, e) => {
+    try {
+      if (e.args.trim() === 'reset') {
+        await $.store.delete(PICKS_KEY)
+        return { text: '紀錄已清空。' }
+      }
+      return { text: statsText(await readPicks($)) }
+    } catch {
+      return { text: '讀不到紀錄。' }
+    }
   })
 
   // Jev reads only what it is sent, so keep what the person last typed.
   on('prompt.submit', async ($, e, next) => {
-    if (e.isMeta !== true) latestUserMessage = e.text
+    if (e.isMeta !== true && e.command === undefined) {
+      latestUserMessage = e.text
+      if (open !== null) {
+        const places = placesSent(e.text, open.prompts)
+        settle($, places === undefined ? 'ignored' : 'picked', places)
+      }
+    }
     return next(e)
   })
 
@@ -330,7 +475,13 @@ export const register: Register = (on, options) => {
       }
       // A newer turn started (or another completed) while we waited: drop ours.
       if (view.kind !== 'loading' || view.turnId !== turnId) return
+      // An earlier offer nobody answered (a turn the person did not type) ends here.
+      settle($, 'ignored')
       show($, scored.items.length === 0 ? { kind: 'hidden' } : { kind: 'offer', ...scored, original })
+      const scores = scored.items.map(item => item.score)
+      if (scores.length > 0 && scores.every((score): score is number => score !== undefined)) {
+        open = { scores, prompts: scored.items.map(item => item.prompt) }
+      }
       const top = scored.items[0]
       if (top !== undefined) void $.prompt.suggest({ text: top.prompt }).catch(() => undefined)
     })()
@@ -354,6 +505,14 @@ export const register: Register = (on, options) => {
     }
 
     const items = view.items
+    const fill = (text: string) => {
+      show($, { kind: 'hidden' })
+      void $.prompt.fill({ text }).then(
+        r => r.isFilled || $.ui.toast('could not fill the prompt box'),
+        error => $.ui.toast(`could not fill: ${String(error)}`),
+      )
+    }
+    const combinations = combinationsFor(items.length)
     return (
       <Box flexDirection="column">
         {below}
@@ -372,17 +531,40 @@ export const register: Register = (on, options) => {
               plain
               label={buttonLabel(item, index)}
               onPress={() => {
-                show($, { kind: 'hidden' })
-                void $.prompt.fill({ text: item.prompt }).then(
-                  r => r.isFilled || $.ui.toast('could not fill the prompt box'),
-                  error => $.ui.toast(`could not fill: ${String(error)}`),
-                )
+                settle($, 'picked', [index])
+                fill(item.prompt)
               }}
             />
           </Box>
         ))}
+        {combinations.length === 0 ? null : (
+          <Box marginLeft={2} flexDirection="row" flexWrap="wrap" columnGap={3}>
+            <Text dimColor>一起做</Text>
+            {combinations.map(({ places, hotkey }) => (
+              <Button
+                key={`combo-${places.map(place => place + 1).join('-')}`}
+                hotkey={hotkey}
+                plain
+                label={places.map(place => place + 1).join('+')}
+                onPress={() => {
+                  settle($, 'picked', [...places])
+                  fill(combinedPrompt(items, places))
+                }}
+              />
+            ))}
+          </Box>
+        )}
         <Box marginLeft={2}>
-          <Button key="dismiss" hotkey="0" plain label="dismiss" onPress={() => show($, { kind: 'hidden' })} />
+          <Button
+            key="dismiss"
+            hotkey="0"
+            plain
+            label="dismiss"
+            onPress={() => {
+              settle($, 'dismissed')
+              show($, { kind: 'hidden' })
+            }}
+          />
         </Box>
       </Box>
     )
