@@ -15,11 +15,13 @@ next:
 
 The scores above come from a real Jev request on a made-up conversation about fixing a bug. `★ 建議` means "recommended" and `一起做` means "do together".
 
-Press `1`, `2` or `3` from an empty prompt box to put that prompt in the box as a draft, then edit it and press Enter yourself. To do several at once, press `4` to `7`: the chosen prompts go into one draft as a numbered list, in the order shown. `0` dismisses. Tab takes the top suggestion. The plugin never submits a prompt on its own.
+Press `1`, `2` or `3` from an empty prompt box to put that prompt in the box as a draft, then edit it and press Enter yourself. To do several at once, press `4` to `7`: the chosen prompts go into one draft as a numbered list, in the order shown. Jev scores `4` to `7` too, for doing those steps together, and each key shows its score once Jev gives one (the sample above predates that). `0` dismisses. Tab takes the top suggestion. The plugin never submits a prompt on its own.
+
+Pressed a key by mistake? Clear the prompt box and type `/jev-next`: the suggestions come back, and the mistaken choice is taken out of the record (see [Is Jev worth it?](#is-jev-worth-it)). They stay available until the next answer ends.
 
 ## Requirements
 
-- Claude Code in a terminal. Suggestions are not drawn in the desktop app or VS Code. The Claude mobile app (Remote Control) does not draw them either: there, type `/jev-next` to print the current suggestions as text, then copy the one you want. Tested on version 2.1.317. The plugin API it uses is in early access and may change between releases.
+- Claude Code in a terminal. Suggestions are not drawn in the desktop app or VS Code. The Claude mobile app (Remote Control) does not draw them either: there, type `/jev-next` to print the current suggestions as text, and send a key's digit alone (`2`, or `6` for 1+3) to send that suggestion. While suggestions stand, a lone digit sent from the phone is always read this way, so to answer Claude with a bare number, add a word (`option 2`). Sent one by mistake? Stop the turn if it started, then type `/jev-next` to get the suggestions back. Tested on version 2.1.317. The plugin API it uses is in early access and may change between releases.
 - A TypeSafe API key.
 - You accept that conversation text is sent to TypeSafe, as described next.
 
@@ -73,7 +75,7 @@ Nothing is sent from `claude -p` runs, the desktop app, VS Code, or for subagent
 Each answer can add two charges:
 
 - **One extra request to your session's model**, which writes the suggestions. It reuses the prompt cache when it can. If the cache has expired or you just changed model, the whole conversation is billed again.
-- **One Jev request**, billed by TypeSafe on input tokens. Check TypeSafe for current prices.
+- **One Jev request**, billed by TypeSafe on input tokens. It asks up to seven questions: one per suggestion and one per combination on `4` to `7`. Check TypeSafe for current prices.
 
 ## How scoring works
 
@@ -126,9 +128,9 @@ claude plugin test .
 
 ## 繁體中文簡介
 
-每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單。按數字鍵只會把內容放進輸入框，不會自動送出。
+每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單，Jev 也會替這些組合打分數。按數字鍵只會把內容放進輸入框，不會自動送出。不小心按錯的話，清空輸入框再打 `/jev-next`，選項會再跳出來，剛才那次也不會算進紀錄。
 
-用 Claude 手機 app 遙控終端機（Remote Control）時，手機看不到輸入框上方的選項。這時在手機輸入 `/jev-next`，會印出目前的建議和分數，長按複製想用的那句再貼上送出。照原樣送出也會記進 `/jev-stats`。
+用 Claude 手機 app 遙控終端機（Remote Control）時，手機看不到輸入框上方的選項。這時在手機輸入 `/jev-next`，會印出目前的建議和分數；接著只打一個數字送出，例如 `2`，就會送出第 2 個建議，`4` 到 `7` 是組合。有建議時，手機上單獨送出的數字一律當成選建議，所以要回答 Claude 的編號問題時，請多打個字，例如「選 2」。不小心送出數字的話，先停下 Claude（如果它已經開始做），再打 `/jev-next` 叫回選項。
 
 **注意：** 你的最後一句話、模型的最後回答和建議選項都會送到 TypeSafe，也會多出模型和 Jev 的費用。輸入 `/jev-stats` 可以看你有多常選 Jev 的第一名，這份紀錄只有分數和位置、只存在你的電腦。安裝前請先看上面的 [What leaves your computer](#what-leaves-your-computer) 和 [Costs](#costs)。
 

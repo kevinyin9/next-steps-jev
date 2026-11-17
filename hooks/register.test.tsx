@@ -6,6 +6,7 @@ const BAND = {
   surface: 'terminal',
   props: {
     hasSurvey: false,
+    isCollapsed: false,
     isWorking: false,
     maxRows: 20,
     bodyColumns: 80,
@@ -27,6 +28,8 @@ let forks = 0
 let filled: string[] = []
 let forkReply = FORK_REPLY
 const stored = new Map<string, unknown>()
+// The last prompt as it reached the hooks beneath this plugin.
+let reached = ''
 
 function world(
   on: any,
@@ -67,6 +70,11 @@ function world(
   })
   on('prompt.suggest', () => ({ isShown: true }))
   filled = []
+  reached = ''
+  on('prompt.submit', (_: unknown, e: any) => {
+    reached = e.text
+    return { text: e.text }
+  })
   on('prompt.fill', (_: unknown, e: any) => {
     filled.push(e.text)
     return { isFilled: true }
@@ -300,7 +308,6 @@ test('0 is counted as dismissed', async ($, on) => {
 
 test('sending the top prompt unchanged (as Tab does) counts as choosing it', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
-  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
   await finish($)
   await labels($)
   await $.prompt.submit({ text: 'run the tests' } as any)
@@ -309,7 +316,6 @@ test('sending the top prompt unchanged (as Tab does) counts as choosing it', asy
 
 test('typing something else counts as not chosen', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
-  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
   await finish($)
   await labels($)
   await $.prompt.submit({ text: 'something of my own' } as any)
@@ -356,6 +362,7 @@ test('/jev-next prints the offer as text, best first, with the full prompts', as
       ['1. tests  84 ★ 建議', 'run the tests'].join('\n'),
       ['2. commit  40', 'commit this'].join('\n'),
       ['3. indent  14', 'reformat everything'].join('\n'),
+      '輸入 1 到 3 直接送出那一句。一次送好幾句：4=1+2、5=2+3、6=1+3、7=1+2+3。',
     ].join('\n\n'),
   )
 })
@@ -375,20 +382,134 @@ test('/jev-next with nothing offered says so', async ($, on) => {
   expect(await next($)).toContain('目前沒有建議')
 })
 
-test('/jev-next after the offer was used says nothing is offered', async ($, on) => {
+test('/jev-next after a press brings the offer back, and only the choice made again counts', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
   await finish($)
   await pressAfterOffer($, 'pick-1')
+  expect(await next($)).toContain('已叫回剛才的建議')
+  expect(await stats($)).toContain('還沒有紀錄')
+  expect((await labels($))[1]).toBe('commit  40')
+  await pressAfterOffer($, 'pick-2')
+  expect(await stats($)).toContain('只選一個：1 次，其中選了 Jev 第一名 0 次')
+})
+
+test('/jev-next brings back nothing once a new answer has ended', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2' })
   expect(await next($)).toContain('目前沒有建議')
 })
 
 test('/jev-next does not count as answering the offer', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
-  on('prompt.submit', (_: unknown, e: any) => ({ text: e.text }))
   await finish($)
   await labels($)
   await $.prompt.submit({ text: '/jev-next', command: 'jev-next' } as any)
   await next($)
   await $.prompt.submit({ text: 'run the tests' } as any)
   expect(await stats($)).toContain('選了 Jev 第一名 1 次')
+})
+
+const PHONE = { kind: 'bridge' }
+const TYPED = { kind: 'composer' }
+
+// What reached the model for a prompt, as the hooks beneath this plugin saw it.
+async function send($: any, text: string, origin: object): Promise<string> {
+  await $.prompt.submit({ text, origin } as any)
+  return reached
+}
+
+test('from the phone, 2 alone sends the second suggestion and counts as that pick', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  expect(await send($, '2', PHONE)).toBe('commit this')
+  expect(await stats($)).toContain('只選一個：1 次，其中選了 Jev 第一名 0 次')
+})
+
+test('a digit sent from the phone by mistake: /jev-next brings the offer back and takes the pick out', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  await send($, '2', PHONE)
+  await $.turn.start({ turnId: 't2' } as any)
+  expect(await next($)).toContain('2. commit  40')
+  expect(await stats($)).toContain('還沒有紀錄')
+  expect(await send($, '1', PHONE)).toBe('run the tests')
+  expect(await stats($)).toContain('選了 Jev 第一名 1 次')
+})
+
+// Jev's answers for the single steps and for steps together, by question id.
+const okWith = (scores: number[], together: Record<string, number>) => {
+  const reply = ok(scores)
+  const body = JSON.parse(reply.value.text)
+  for (const [id, score] of Object.entries(together)) body.answers[id] = { type: 'score', score }
+  return { value: { ...reply.value, text: JSON.stringify(body) } }
+}
+
+test('Jev scores 4 to 7 as well, each by the steps it puts together', async ($, on) => {
+  // On screen: 1 tests (step 2), 2 commit (step 3), 3 indent (step 1).
+  const calls = world(on, () =>
+    okWith([0.56, 3.34, 1.58], { together_2_3: 3, together_1_3: 2, together_1_2: 1, together_1_2_3: 0 }),
+  )
+  await finish($)
+  const shown = await labels($)
+  expect(shown.slice(3, 7)).toEqual(['1+2  75', '2+3  50', '1+3  25', '1+2+3  0'])
+  expect(Object.keys(JSON.parse(calls[0].init.body).questions)).toEqual([
+    'step_1', 'step_2', 'step_3', 'together_1_2', 'together_2_3', 'together_1_3', 'together_1_2_3',
+  ])
+  expect(await next($)).toContain('4=1+2（75）、5=2+3（50）、6=1+3（25）、7=1+2+3（0）')
+})
+
+test('a missing score for steps together leaves that key unscored', async ($, on) => {
+  world(on, () => okWith([0.56, 3.34, 1.58], { together_2_3: 3, together_1_3: 9 }))
+  await finish($)
+  const shown = await labels($)
+  expect(shown.slice(3, 7)).toEqual(['1+2  75', '2+3', '1+3', '1+2+3'])
+})
+
+test('from the phone, 6 sends 1+3 as one numbered prompt', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  expect(await send($, ' 6 ', PHONE)).toBe(['1. run the tests', '2. reformat everything'].join('\n'))
+})
+
+test('a digit typed at the terminal is sent as typed', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  expect(await send($, '2', TYPED)).toBe('2')
+})
+
+test('from the phone, a digit with no suggestion behind it is sent as typed', async ($, on) => {
+  world(on, () => ok([1, 2]))
+  forkReply = JSON.stringify([
+    { label: 'tests', prompt: 'run the tests' },
+    { label: 'commit', prompt: 'commit this' },
+  ])
+  await finish($)
+  await labels($)
+  expect(await send($, '3', PHONE)).toBe('3')
+  expect(await send($, '5', PHONE)).toBe('5')
+})
+
+test('from the phone, with nothing offered, a digit is sent as typed', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await $.session.start(TERMINAL)
+  expect(await send($, '1', PHONE)).toBe('1')
+})
+
+test("this plugin's own commands are never suggested", async ($, on) => {
+  world(on, () => ok([3, 2]))
+  forkReply = JSON.stringify([
+    { label: 'see them', prompt: '/jev-next' },
+    { label: 'stats', prompt: '/jev-stats reset' },
+    { label: 'tests', prompt: 'run the tests' },
+    { label: 'commit', prompt: 'commit this' },
+  ])
+  await finish($)
+  const shown = await labels($)
+  expect(shown.slice(0, 2)).toEqual(['tests  75 ★ 建議', 'commit  50'])
 })
