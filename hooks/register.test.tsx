@@ -30,6 +30,9 @@ let forkReply = FORK_REPLY
 const stored = new Map<string, unknown>()
 // The last prompt as it reached the hooks beneath this plugin.
 let reached = ''
+// This session's file as Claude Code keeps it (null: none found), and what the fork was asked.
+let sessionJson: object | null = null
+let forkPrompts: string[] = []
 
 function world(
   on: any,
@@ -38,7 +41,14 @@ function world(
   enabledPlugins: Record<string, boolean> = {},
 ) {
   const calls: any[] = []
-  mock.env(on, env)
+  mock.env(on, { USERPROFILE: '/home', ...env })
+  sessionJson = null
+  on('session.id', () => ({ value: 's1' }))
+  on('fs.list', () => ({
+    value: sessionJson === null ? [] : [{ name: '98356.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }],
+  }))
+  on('fs.read', () => ({ value: JSON.stringify(sessionJson) }))
+  on('command.run', () => ({ text: '' }))
   stored.clear()
   on('store.get', (_: unknown, e: any) => ({ value: stored.get(e.key) }))
   on('store.set', (_: unknown, e: any) => {
@@ -60,8 +70,10 @@ function world(
   on('command.list', () => ({ value: [] }))
   forks = 0
   forkReply = FORK_REPLY
-  on('model.fork', () => {
+  forkPrompts = []
+  on('model.fork', (_: unknown, e: any) => {
     forks++
+    forkPrompts.push(e.prompt)
     return { value: { isAnswered: true, text: forkReply, usage: USAGE } }
   })
   on('http.fetch', (_: unknown, e: any) => {
@@ -462,6 +474,28 @@ test('Jev scores 4 to 7 as well, each by the steps it puts together', async ($, 
   expect(await next($)).toContain('4=1+2（75）、5=2+3（50）、6=1+3（25）、7=1+2+3（0）')
 })
 
+test('the star and the colored ground go to the highest score of all keys, a combination included', async ($, on) => {
+  // On screen: 1 tests 84 (step 2), 2 commit 40 (step 3); so 1+2 on screen is together_2_3.
+  world(on, () => okWith([0.56, 3.34, 1.58], { together_2_3: 4 }))
+  await finish($)
+  const shown = await labels($)
+  expect(shown[0]).toBe('tests  84')
+  expect(shown[3]).toBe('1+2  100 ★ 建議')
+  const ui = await $.ui.mount(BAND)
+  const texts = await ui.findAll({ type: 'Text' })
+  await ui.unmount()
+  const grounded = texts.filter((t: any) => t.props?.backgroundColor !== undefined)
+  expect(grounded.map((t: any) => [t.text, t.props.backgroundColor])).toEqual([['1+2  100 ★ 建議', 'success']])
+  expect(await next($)).toContain('4=1+2（100 ★）')
+})
+
+test('a combination below the best single gets no star', async ($, on) => {
+  world(on, () => okWith([0.56, 3.34, 1.58], { together_2_3: 3 }))
+  await finish($)
+  const shown = await labels($)
+  expect([shown[0], shown[3]]).toEqual(['tests  84 ★ 建議', '1+2  75'])
+})
+
 test('a missing score for steps together leaves that key unscored', async ($, on) => {
   world(on, () => okWith([0.56, 3.34, 1.58], { together_2_3: 3, together_1_3: 9 }))
   await finish($)
@@ -512,4 +546,127 @@ test("this plugin's own commands are never suggested", async ($, on) => {
   await finish($)
   const shown = await labels($)
   expect(shown.slice(0, 2)).toEqual(['tests  75 ★ 建議', 'commit  50'])
+})
+
+// Renaming the session. On screen, as Jev ranks FORK_REPLY: tests, commit, indent.
+const NAMED_REPLY = (name: string) =>
+  JSON.stringify({ next: JSON.parse(FORK_REPLY), name })
+const DERIVED = { sessionId: 's1', name: 'user-5d', nameSource: 'derived' }
+const CHOSEN = { sessionId: 's1', name: '股票回測', nameSource: 'user' }
+
+const renameLabel = (shown: string[]) => shown.find(label => label.startsWith('改名成'))
+
+async function renames(): Promise<unknown> {
+  await new Promise(resolve => setTimeout(resolve, 30))
+  return stored.get('renames-v1')
+}
+
+test('a session with a placeholder name is offered one on 8, without asking Jev', async ($, on) => {
+  const calls = world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('「next-steps 改名」')
+  await finish($)
+  expect(renameLabel(await labels($))).toBe('改名成「next-steps 改名」')
+  expect(forkPrompts[0]).toContain('The session has no real name yet.')
+  expect(Object.keys(JSON.parse(calls[0].init.body).questions)).not.toContain('rename')
+})
+
+test('the rename sits on key 8, a digit, since a letter never reaches the band from the prompt box', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('next-steps 改名')
+  await finish($)
+  await labels($)
+  const ui = await $.ui.mount(BAND)
+  const buttons = await ui.findAll({ type: 'Button' })
+  await ui.unmount()
+  const keys = buttons.map((b: any) => b.props?.hotkey)
+  expect(buttons.find((b: any) => b.props?.label?.startsWith('改名成'))?.props?.hotkey).toBe('8')
+  expect(new Set(keys).size).toBe(keys.length)
+})
+
+test('8 puts /rename in the prompt box and keeps the suggestions; sending it as is counts as accepted', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('next-steps 改名')
+  await finish($)
+  await pressAfterOffer($, 'rename')
+  expect(filled).toEqual(['/rename next-steps 改名'])
+  const after = await labels($)
+  expect(after[0]).toBe('tests  84 ★ 建議')
+  expect(renameLabel(after)).toBeUndefined()
+  await $.command.run({ command: 'rename', args: 'next-steps 改名' } as any)
+  expect(await renames()).toEqual([{ from: 'user-5d', proposed: 'next-steps 改名', chose: 'accepted' }])
+})
+
+test('a rewritten name is kept as the name you wanted', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('next-steps 改名')
+  await finish($)
+  await labels($)
+  await $.command.run({ command: 'rename', args: ' 外掛改名 ' } as any)
+  expect(await renames()).toEqual([
+    { from: 'user-5d', proposed: 'next-steps 改名', chose: 'edited', final: '外掛改名' },
+  ])
+  expect(await stats($)).toContain('建議「next-steps 改名」，你改成「外掛改名」')
+})
+
+test('a chosen name is offered a replacement only when Jev scores the rename high enough', async ($, on) => {
+  const calls = world(on, () => okWith([0.56, 3.34, 1.58], { rename: 3 }))
+  sessionJson = CHOSEN
+  forkReply = NAMED_REPLY('next-steps 外掛')
+  await finish($)
+  expect(renameLabel(await labels($))).toBe('改名成「next-steps 外掛」  75')
+  expect(forkPrompts[0]).toContain('It is now named "股票回測"')
+  const body = JSON.parse(calls[0].init.body)
+  expect(body.state.session_name).toBe('股票回測')
+  expect(body.state.proposed_session_name).toBe('next-steps 外掛')
+})
+
+test('a rename Jev scores below the bar is not offered', async ($, on) => {
+  world(on, () => okWith([0.56, 3.34, 1.58], { rename: 2 }))
+  sessionJson = CHOSEN
+  forkReply = NAMED_REPLY('next-steps 外掛')
+  await finish($)
+  expect(renameLabel(await labels($))).toBeUndefined()
+})
+
+test('the same name again, or an old-style reply with no name, offers nothing', async ($, on) => {
+  const calls = world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = CHOSEN
+  forkReply = NAMED_REPLY('股票回測')
+  await finish($)
+  expect(renameLabel(await labels($))).toBeUndefined()
+  expect(Object.keys(JSON.parse(calls[0].init.body).questions)).not.toContain('rename')
+})
+
+test('a name passed over is recorded, and no name is asked for over the next answers', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('next-steps 改名')
+  await finish($)
+  await labels($)
+  await $.turn.complete({ reason: 'answer', answer: ANSWER, durationMs: 1, isAborted: false, turnId: 't2' })
+  await labels($)
+  expect(await renames()).toEqual([{ from: 'user-5d', proposed: 'next-steps 改名', chose: 'ignored' }])
+  expect(forkPrompts[1]).not.toContain('name this whole session')
+})
+
+test('a /rename with nothing offered is recorded as your own name', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = CHOSEN
+  await $.session.start(TERMINAL)
+  await $.command.run({ command: 'rename', args: '回測 v2' } as any)
+  expect(await renames()).toEqual([{ from: '股票回測', chose: 'manual', final: '回測 v2' }])
+  expect(await stats($)).toContain('「股票回測」改成「回測 v2」')
+})
+
+test('with suggestRename off, no name is asked for or offered', { options: { suggestRename: false } }, async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  sessionJson = DERIVED
+  forkReply = NAMED_REPLY('next-steps 改名')
+  await finish($)
+  expect(renameLabel(await labels($))).toBeUndefined()
+  expect(forkPrompts[0]).not.toContain('name this whole session')
 })

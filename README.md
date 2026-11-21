@@ -13,7 +13,7 @@ next:
   0: dismiss
 ```
 
-The scores above come from a real Jev request on a made-up conversation about fixing a bug. `★ 建議` means "recommended" and `一起做` means "do together".
+The scores above come from a real Jev request on a made-up conversation about fixing a bug. `★ 建議` means "recommended" and `一起做` means "do together". The star, on a colored ground, goes to the highest score of every key, a combination included.
 
 Press `1`, `2` or `3` from an empty prompt box to put that prompt in the box as a draft, then edit it and press Enter yourself. To do several at once, press `4` to `7`: the chosen prompts go into one draft as a numbered list, in the order shown. Jev scores `4` to `7` too, for doing those steps together, and each key shows its score once Jev gives one (the sample above predates that). `0` dismisses. Tab takes the top suggestion. The plugin never submits a prompt on its own.
 
@@ -83,6 +83,14 @@ Each suggestion gets a separate score from 0 to 100, based on five levels from "
 
 Jev gives numbers without reasons, and it sees only the text listed above, so it does not know your longer-term goals. Treat a score as a second opinion.
 
+## Session names
+
+When a session has no real name yet, or Jev judges that its current name no longer fits, the band adds a line such as `8: 改名成「next-steps 改名」  75`. Pressing `8` puts `/rename <name>` in the prompt box. Edit it if you like and press Enter: sent by you, `/rename` also retitles the terminal tab, which a plugin cannot do by itself. Nothing is renamed until you send it.
+
+The name comes from the same request that writes the suggestions, so it costs no extra model call. Jev answers one more question when the session already has a name. After a name is used or passed over, none is offered for the next five answers. The plugin reads the session's current name from Claude Code's session file on this computer. Turn the feature off with the `suggestRename` option.
+
+`/jev-stats` also lists how often you took the name as offered, rewrote it, or ignored it, and the names you wrote yourself. Over time that list shows the kind of name you want.
+
 ## Is Jev worth it?
 
 The plugin records what you do with each scored offer: whether you pressed Jev's first place, another one, several at once, `0`, or sent something else. Sending a suggestion unchanged, as Tab does, counts as choosing it. Run `/jev-stats` to see how often you chose the first place, next to how often you would by chance. If you rarely choose it, Jev is adding cost without helping you.
@@ -128,7 +136,9 @@ claude plugin test .
 
 ## 繁體中文簡介
 
-每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單，Jev 也會替這些組合打分數。按數字鍵只會把內容放進輸入框，不會自動送出。不小心按錯的話，清空輸入框再打 `/jev-next`，選項會再跳出來，剛才那次也不會算進紀錄。
+每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單，Jev 也會替這些組合打分數。1 到 7 裡分數最高的那一個會加上「★ 建議」和底色。按數字鍵只會把內容放進輸入框，不會自動送出。不小心按錯的話，清空輸入框再打 `/jev-next`，選項會再跳出來，剛才那次也不會算進紀錄。
+
+session 還沒有名字，或 Jev 覺得現在的名字已經不符合對話內容時，選項下面會多一行「8: 改名成「…」」。按 8 會把 `/rename 名字` 放進輸入框，可以先改字再按 Enter，這樣 session 名字和終端機分頁標題會一起改。`/jev-stats` 會統計你照用、改字或沒理會的次數，和你自己取的名字。
 
 用 Claude 手機 app 遙控終端機（Remote Control）時，手機看不到輸入框上方的選項。這時在手機輸入 `/jev-next`，會印出目前的建議和分數；接著只打一個數字送出，例如 `2`，就會送出第 2 個建議，`4` 到 `7` 是組合。有建議時，手機上單獨送出的數字一律當成選建議，所以要回答 Claude 的編號問題時，請多打個字，例如「選 2」。不小心送出數字的話，先停下 Claude（如果它已經開始做），再打 `/jev-next` 叫回選項。
 
