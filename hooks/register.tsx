@@ -618,6 +618,24 @@ function renameStatsText(renames: readonly Renamed[]): string {
 // Session-local view state; a hot reload resets it, which is fine.
 let view: View = { kind: 'hidden' }
 let latestUserMessage = ''
+
+// Turns the person did not ask for: a Monitor event or other background task's
+// notice, a scheduled prompt, another session's message. Such a turn leaves an
+// offer standing; the person is still choosing from it.
+const NOT_BY_PERSON: ReadonlySet<string> = new Set([
+  'task-notification',
+  'scheduled-trigger',
+  'peer',
+  'peer-send-message',
+  'projects-relay',
+  'coordinator',
+  'observer',
+  'observer-activity',
+])
+// Who started the prompt waiting to become the next turn, and who started the
+// turn now running; a turn no prompt led to (a continuation) counts as the person's.
+let nextTurnByPerson = true
+let turnByPerson = true
 // Only a terminal session with a person at it draws the buttons. Everywhere else
 // (a scheduled `claude -p`, the desktop app) the fork and Jev would cost money and
 // send text out for a result nobody sees. A reload runs session.start again.
@@ -801,7 +819,10 @@ export const register: Register = (on, options) => {
   // From the phone, which has no band, a key's digit alone sends what that key
   // would have put in the prompt box.
   on('prompt.submit', async ($, e, next) => {
-    if (e.isMeta === true || e.command !== undefined) return next(e)
+    const byPerson = !NOT_BY_PERSON.has(e.origin?.kind ?? '')
+    // Only a prompt sent while idle starts a turn; one delivered into a running turn does not.
+    if (e.turnId === undefined) nextTurnByPerson = byPerson
+    if (e.isMeta === true || e.command !== undefined || !byPerson) return next(e)
     let keyed: string | undefined
     // A fault here must never hold back what the person sent.
     try {
@@ -821,9 +842,14 @@ export const register: Register = (on, options) => {
     return next({ ...e, text: keyed })
   })
 
-  // A new turn (typed or otherwise) hides whatever was offered.
+  // A new turn hides whatever was offered, save one the person did not start
+  // (a Monitor event): the band is not drawn while it works, and comes back after.
+  // A subagent's run (a background one goes on after the answer) is not a turn here.
   on('turn.start', async ($, e, next) => {
-    if (view.kind !== 'hidden') show($, { kind: 'hidden' })
+    if (e.agentId !== undefined) return next(e)
+    turnByPerson = nextTurnByPerson
+    nextTurnByPerson = true
+    if (view.kind !== 'hidden' && turnByPerson) show($, { kind: 'hidden' })
     return next(e)
   })
 
@@ -834,6 +860,9 @@ export const register: Register = (on, options) => {
     // A subagent's report is not an answer to the person, so nothing goes to Jev for it.
     if (e.agentId !== undefined) return result
     if (e.reason !== 'answer') return result
+    // A turn the person did not start leaves an offer (or one still coming, or
+    // one pressed and not yet sent) as it was; only with nothing standing does it offer.
+    if (!turnByPerson && (view.kind !== 'hidden' || last !== null)) return result
     // A new answer moves past the latest offer: `/jev-next` brings back none now.
     // A stopped turn (Esc after a digit sent by mistake) keeps it.
     last = null

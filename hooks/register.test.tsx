@@ -510,6 +510,57 @@ test('from the phone, 6 sends 1+3 as one numbered prompt', async ($, on) => {
   expect(await send($, ' 6 ', PHONE)).toBe(['1. run the tests', '2. reformat everything'].join('\n'))
 })
 
+const MONITOR = { kind: 'task-notification' }
+
+test('a Monitor event turn leaves the offer standing, unrecorded and not asked for again', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  const before = await labels($)
+  await send($, 'Monitor event: build finished', MONITOR)
+  await $.turn.start({ text: 'Monitor event: build finished', turnId: 't2' })
+  await $.turn.complete({ reason: 'answer', answer: ANSWER, durationMs: 1, isAborted: false, turnId: 't2' })
+  expect(await labels($)).toEqual(before)
+  expect(forkPrompts.length).toBe(1)
+  await new Promise(resolve => setTimeout(resolve, 30))
+  expect(stored.get('picks-v1')).toBeUndefined()
+})
+
+test('after a short Monitor event answer, /jev-next still prints the offer', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  await send($, 'Monitor event: tick', MONITOR)
+  await $.turn.start({ text: 'Monitor event: tick', turnId: 't2' })
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2' })
+  expect(await next($)).toContain('1. tests  84 ★ 建議')
+})
+
+test('a background subagent running after the answer leaves the offer standing', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  const before = await labels($)
+  await $.turn.start({ text: 'look into it', turnId: 'a1', agentId: 'agent-1' })
+  await $.turn.complete({ reason: 'answer', answer: ANSWER, durationMs: 1, isAborted: false, turnId: 'a1', agentId: 'agent-1' })
+  expect(await labels($)).toEqual(before)
+  expect(forkPrompts.length).toBe(1)
+})
+
+test('a turn the person starts after one still hides the offer and asks again', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  await send($, 'Monitor event: build finished', MONITOR)
+  await $.turn.start({ text: '', turnId: 't2' })
+  await send($, 'something else', TYPED)
+  await $.turn.start({ text: 'something else', turnId: 't3' })
+  const ui = await $.ui.mount(BAND)
+  expect(await ui.findAll({ type: 'Button' })).toEqual([])
+  await ui.unmount()
+  await $.turn.complete({ reason: 'answer', answer: ANSWER, durationMs: 1, isAborted: false, turnId: 't3' })
+  await labels($)
+  expect(forkPrompts.length).toBe(2)
+})
+
 test('a digit typed at the terminal is sent as typed', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
   await finish($)
