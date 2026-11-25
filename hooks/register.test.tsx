@@ -405,6 +405,90 @@ test('/jev-next after a press brings the offer back, and only the choice made ag
   expect(await stats($)).toContain('只選一個：1 次，其中選了 Jev 第一名 0 次')
 })
 
+test('Esc on the turn a pick started brings the offer back by itself, the pick taken back', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  const before = await labels($)
+  await pressAfterOffer($, 'pick-1')
+  await send($, 'run the tests', TYPED)
+  await $.turn.start({ text: 'run the tests', turnId: 't2' })
+  await $.turn.complete({ reason: 'aborted', answer: '', durationMs: 1, isAborted: true, turnId: 't2' })
+  expect(await labels($)).toEqual(before)
+  expect(await stats($)).toContain('還沒有紀錄')
+  expect(forkPrompts.length).toBe(1)
+})
+
+test('Esc on a Monitor event turn does not bring back an offer pressed and not yet sent', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await pressAfterOffer($, 'pick-1')
+  await send($, 'Monitor event: tick', MONITOR)
+  await $.turn.start({ text: 'Monitor event: tick', turnId: 't2' })
+  await $.turn.complete({ reason: 'aborted', answer: '', durationMs: 1, isAborted: true, turnId: 't2' })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const ui = await $.ui.mount(BAND)
+  expect(await ui.findAll({ type: 'Button' })).toEqual([])
+  await ui.unmount()
+})
+
+// What the store holds of the latest offer, as a reload of the plugin finds it.
+const SAVED_OFFER = {
+  kind: 'offer',
+  items: [
+    { label: 'tests', prompt: 'run the tests', score: 84, step: 1 },
+    { label: 'commit', prompt: 'commit this', score: 40, step: 2 },
+    { label: 'indent', prompt: 'reformat everything', score: 14, step: 0 },
+  ],
+}
+const SAVED_OPEN = { scores: [84, 40, 14], prompts: ['run the tests', 'commit this', 'reformat everything'] }
+
+test('the latest offer is saved for a reload', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  await finish($)
+  await labels($)
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const saved: any = stored.get('last-offer-v1')
+  expect([saved.sessionId, saved.isShown, saved.offer.items.map((item: any) => item.label)]).toEqual([
+    's1', true, ['tests', 'commit', 'indent'],
+  ])
+})
+
+test('after a reload, the offer on screen comes back by itself', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  stored.set('last-offer-v1', { sessionId: 's1', offer: SAVED_OFFER, open: SAVED_OPEN, isShown: true })
+  await $.session.start(TERMINAL)
+  expect((await labels($))[0]).toBe('tests  84 ★ 建議')
+  expect(await next($)).toContain('1. tests  84 ★ 建議')
+})
+
+test('after a reload, /jev-next brings back an offer pressed before it, the pick taken back', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  const pick = { scores: [84, 40, 14], chose: 'picked', places: [0] }
+  stored.set('picks-v1', [pick])
+  stored.set('last-offer-v1', { sessionId: 's1', offer: SAVED_OFFER, open: SAVED_OPEN, isShown: false, pick })
+  await $.session.start(TERMINAL)
+  expect(await next($)).toContain('已叫回剛才的建議')
+  expect(stored.get('picks-v1')).toEqual([])
+})
+
+test("after a reload, another session's offer is not brought back", async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  stored.set('last-offer-v1', { sessionId: 'other', offer: SAVED_OFFER, open: SAVED_OPEN, isShown: true })
+  await $.session.start(TERMINAL)
+  expect(await next($)).toContain('目前沒有建議')
+})
+
+test('after a reload, a new answer ends what was saved', async ($, on) => {
+  world(on, () => ok([0.56, 3.34, 1.58]))
+  stored.set('last-offer-v1', { sessionId: 's1', offer: SAVED_OFFER, open: SAVED_OPEN, isShown: false })
+  await $.session.start(TERMINAL)
+  await $.turn.start({ text: 'hi', turnId: 't2' })
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2' })
+  expect(await next($)).toContain('目前沒有建議')
+  await new Promise(resolve => setTimeout(resolve, 30))
+  expect(stored.get('last-offer-v1')).toBeUndefined()
+})
+
 test('/jev-next brings back nothing once a new answer has ended', async ($, on) => {
   world(on, () => ok([0.56, 3.34, 1.58]))
   await finish($)

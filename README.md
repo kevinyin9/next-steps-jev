@@ -17,7 +17,7 @@ The scores above come from a real Jev request on a made-up conversation about fi
 
 Press `1`, `2` or `3` from an empty prompt box to put that prompt in the box as a draft, then edit it and press Enter yourself. To do several at once, press `4` to `7`: the chosen prompts go into one draft as a numbered list, in the order shown. Jev scores `4` to `7` too, for doing those steps together, and each key shows its score once Jev gives one (the sample above predates that). `0` dismisses. Tab takes the top suggestion. The plugin never submits a prompt on its own.
 
-Pressed a key by mistake? Clear the prompt box and type `/jev-next`: the suggestions come back, and the mistaken choice is taken out of the record (see [Is Jev worth it?](#is-jev-worth-it)). They stay available until the next answer ends.
+Pressed a key by mistake? Clear the prompt box and type `/jev-next`: the suggestions come back, and the mistaken choice is taken out of the record (see [Is Jev worth it?](#is-jev-worth-it)). They stay available until the next answer ends. Sent one and stopped Claude with Esc? The suggestions come back by themselves, and that choice is taken out of the record too. They also survive `/reload-plugins`: the latest suggestions are saved for the session, on screen again after the reload if they were.
 
 ## Requirements
 
@@ -136,7 +136,7 @@ claude plugin test .
 
 ## 繁體中文簡介
 
-每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單，Jev 也會替這些組合打分數。1 到 7 裡分數最高的那一個會加上「★ 建議」和底色。按數字鍵只會把內容放進輸入框，不會自動送出。不小心按錯的話，清空輸入框再打 `/jev-next`，選項會再跳出來，剛才那次也不會算進紀錄。
+每次回答結束後，Claude 會建議最多 3 個下一步，再由 TypeSafe 的 Jev 依「對完成目前目標的幫助」替每個選項打 0 到 100 分，最高分排第一。按 1 到 3 選一個；按 4 到 7 可一次選兩三個（1+2、2+3、1+3、1+2+3），會合成一份編號清單，Jev 也會替這些組合打分數。1 到 7 裡分數最高的那一個會加上「★ 建議」和底色。按數字鍵只會把內容放進輸入框，不會自動送出。不小心按錯的話，清空輸入框再打 `/jev-next`，選項會再跳出來，剛才那次也不會算進紀錄。已經送出、又按 Esc 停掉 Claude 的回答時，選項會自己回來，剛才那次同樣不算。打 `/reload-plugins` 重新載入外掛後，最近那組建議也還在：原本顯示著的會自己回來，`/jev-next` 也叫得回來。
 
 session 還沒有名字，或 Jev 覺得現在的名字已經不符合對話內容時，選項下面會多一行「8: 改名成「…」」。按 8 會把 `/rename 名字` 放進輸入框，可以先改字再按 Enter，這樣 session 名字和終端機分頁標題會一起改。`/jev-stats` 會統計你照用、改字或沒理會的次數，和你自己取的名字。
 

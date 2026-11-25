@@ -666,6 +666,63 @@ let last: { offer: Offer; open: Open | null; pick?: { written: Promise<Pick | un
 function show($: EngineInterface, nextView: View): void {
   view = nextView
   $.ui.invalidate('ui.render')
+  saveLast($)
+}
+
+// The latest offer also goes to the store, so `/reload-plugins` (which starts this
+// module afresh) does not lose it: the session it belongs to, whether it was on
+// screen, and the outcome written for it, to take back if it is brought back.
+const LAST_KEY = 'last-offer-v1'
+type SavedLast = { sessionId: string; offer: Offer; open: Open | null; isShown: boolean; pick?: Pick }
+let saving: Promise<void> = Promise.resolve()
+
+// Queued, and read when its turn comes: the latest write holds the state as it
+// ends up after the code that called it (`last` is often set just after a show).
+function saveLast($: EngineInterface): void {
+  saving = saving.then(async () => {
+    try {
+      if (last === null) return void (await $.store.delete(LAST_KEY))
+      const pick = await last.pick?.written
+      const saved: SavedLast = {
+        sessionId: await $.session.id(),
+        // A name offered is not brought back: its outcome would have nowhere to go.
+        offer: { ...last.offer, rename: undefined },
+        open: last.open,
+        isShown: view.kind === 'offer',
+        ...(pick === undefined ? {} : { pick }),
+      }
+      await $.store.set(LAST_KEY, saved)
+    } catch (error) {
+      $.ui.log(`offer not saved: ${error instanceof Error ? error.name : 'error'}`, { to: 'debug' })
+    }
+  })
+}
+
+// After a reload: the latest offer of this session back from the store, once,
+// on screen again if it was. Nothing happens if one is already held.
+let restoring: Promise<void> | null = null
+
+function restoreLast($: EngineInterface): Promise<void> {
+  restoring ??= (async () => {
+    try {
+      const held = (await $.store.get(LAST_KEY)) as SavedLast | undefined
+      if (held?.offer?.kind !== 'offer' || !Array.isArray(held.offer.items)) return
+      if (held.sessionId !== (await $.session.id())) return
+      if (last !== null || view.kind !== 'hidden') return
+      last = {
+        offer: held.offer,
+        open: held.open,
+        ...(held.pick === undefined ? {} : { pick: { written: Promise.resolve(held.pick) } }),
+      }
+      if (held.isShown) {
+        open = held.open
+        show($, held.offer)
+      }
+    } catch (error) {
+      $.ui.log(`offer not restored: ${error instanceof Error ? error.name : 'error'}`, { to: 'debug' })
+    }
+  })()
+  return restoring
 }
 
 // Writes the open offer's outcome once; later calls for it do nothing.
@@ -727,6 +784,7 @@ function offerText(offer: Offer): string {
 
 // `/jev-next`: the offer on screen, or the latest one brought back.
 async function nextText($: EngineInterface): Promise<string> {
+  await restoreLast($)
   if (view.kind === 'offer') return offerText(view)
   if (view.kind === 'loading') return '建議還在產生，等幾秒再試一次。'
   // `recall` sets the view; read it afresh, past what was narrowed above.
@@ -826,6 +884,7 @@ export const register: Register = (on, options) => {
     let keyed: string | undefined
     // A fault here must never hold back what the person sent.
     try {
+      await restoreLast($)
       keyed = e.origin?.kind === 'bridge' ? promptForKey(e.text) : undefined
       const text = keyed ?? e.text
       latestUserMessage = text
@@ -849,6 +908,8 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     turnByPerson = nextTurnByPerson
     nextTurnByPerson = true
+    // Past a turn the person started, what the store holds is no longer the latest.
+    if (turnByPerson) restoring ??= Promise.resolve()
     if (view.kind !== 'hidden' && turnByPerson) show($, { kind: 'hidden' })
     return next(e)
   })
@@ -859,6 +920,12 @@ export const register: Register = (on, options) => {
     if (!drawsForAPerson) return result
     // A subagent's report is not an answer to the person, so nothing goes to Jev for it.
     if (e.agentId !== undefined) return result
+    // Stopped (Esc) on a turn the person sent: the offer comes back by itself, as
+    // `/jev-next` brings it, and the choice that led to the stopped turn is taken back.
+    if (e.reason === 'aborted' && turnByPerson && view.kind === 'hidden' && last !== null) {
+      void recall($).catch(() => undefined)
+      return result
+    }
     if (e.reason !== 'answer') return result
     // A turn the person did not start leaves an offer (or one still coming, or
     // one pressed and not yet sent) as it was; only with nothing standing does it offer.
@@ -866,6 +933,8 @@ export const register: Register = (on, options) => {
     // A new answer moves past the latest offer: `/jev-next` brings back none now.
     // A stopped turn (Esc after a digit sent by mistake) keeps it.
     last = null
+    restoring ??= Promise.resolve()
+    saveLast($)
     // A name offered with the last suggestions and not used is passed over.
     passOverRename($)
     if (e.answer.trim().length < minTurnChars) return result
@@ -937,6 +1006,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next): Promise<RenderElement> => {
     const below = await next(e)
+    if (restoring === null) void restoreLast($)
     if (e.props.hasSurvey || e.props.isWorking || view.kind === 'hidden') return below
     const { Box, Text, Button } = $.ui.resolve(e)
 
